@@ -1,0 +1,121 @@
+services:
+  app:
+    container_name: web-pos-app
+    build:
+      context: ..
+      dockerfile: docker-local/Dockerfile
+    restart: unless-stopped
+    working_dir: /var/www
+    volumes:
+      - ../:/var/www
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      minio:
+        condition: service_started
+    networks:
+      - web-pos-network
+
+  setup:
+    container_name: web-pos-setup
+    build:
+      context: ..
+      dockerfile: docker-local/Dockerfile
+    working_dir: /var/www
+    command: >
+      sh -c "
+      composer install &&
+      php artisan migrate:fresh --seed
+      "
+    volumes:
+      - ../:/var/www
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - web-pos-network
+
+  nginx:
+    container_name: web-pos-nginx
+    image: nginx:alpine
+    restart: unless-stopped
+    ports:
+      - "8000:80"
+    volumes:
+      - ../:/var/www
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf
+    depends_on:
+      - app
+    networks:
+      - web-pos-network
+
+  db:
+    container_name: web-pos-db
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:-web_pos_api}
+      POSTGRES_USER: ${DB_USERNAME:-web_pos_api}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-asdffdsa}
+    volumes:
+      - ../data/db-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-web_pos_api}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - web-pos-network
+
+  redis:
+    container_name: web-pos-redis
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - ../data/redis-data:/data
+    networks:
+      - web-pos-network
+
+  minio:
+    container_name: web-pos-minio
+    image: minio/minio
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:-root}
+      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:-asdffdsa}
+    command: server /data --console-address ":9001"
+    volumes:
+      - ../data/minio-data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    networks:
+      - web-pos-network
+
+  minio-setup:
+    container_name: web-pos-minio-setup
+    image: minio/mc
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      until (/usr/bin/mc alias set myminio http://minio:9000 ${AWS_ACCESS_KEY_ID:-root} ${AWS_SECRET_ACCESS_KEY:-asdffdsa})
+      do
+        echo 'waiting for minio...'
+        sleep 1
+      done;
+
+      /usr/bin/mc mb --ignore-existing myminio/web-pos-bucket;
+      /usr/bin/mc anonymous set download myminio/web-pos-bucket;
+      exit 0;
+      "
+    networks:
+      - web-pos-network
+
+networks:
+  web-pos-network:
+    driver: bridge

@@ -68,13 +68,16 @@ RUN chown -R www-data:www-data /var/www \
 # Generate application key (if .env exists)
 RUN if [ -f .env ]; then php artisan key:generate --force || true; fi
 
-# Optimize Laravel
-RUN php artisan config:cache || true && \
-    php artisan route:cache || true && \
-    php artisan view:cache || true
+
+
 
 # Expose port
 EXPOSE 80
 
-# Start all services
-CMD ["/usr/bin/supervisord", "-c", "/etc/supervisord.conf"]
+
+# Copy startup script
+COPY docker-coolify/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Start the application
+CMD ["/entrypoint.sh"]
